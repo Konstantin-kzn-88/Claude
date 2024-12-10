@@ -1,9 +1,10 @@
 import numpy as np
-from dataclasses import dataclass
-from typing import Tuple, Dict
 import matplotlib
 
 matplotlib.use('Agg')
+
+from dataclasses import dataclass
+from typing import Tuple, Dict
 import matplotlib.pyplot as plt
 
 
@@ -131,7 +132,25 @@ class LPGSpillEvaporation:
 
     def plot_results(self, times: np.ndarray, masses: np.ndarray):
         """Построение графиков результатов"""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+
+        # Добавляем текстовый блок с исходными данными
+        info_text = (
+            f"Исходные данные:\n"
+            f"Вещество: {self.lpg.name}\n"
+            f"Начальная масса: {self.initial_mass:.1f} кг\n"
+            f"Площадь пролива: {self.spill_area:.1f} м²\n"
+            f"Начальная температура: {self.initial_temp - 273.15:.1f}°C\n"
+            f"Температура поверхности: {self.surface_temp - 273.15:.1f}°C\n"
+            f"Мгновенное испарение: {self.flash_fraction * 100:.1f}%"
+        )
+        # Размещаем текст в правом верхнем углу первого графика
+        ax1.text(0.98, 0.98, info_text,
+                 transform=ax1.transAxes,
+                 verticalalignment='top',
+                 horizontalalignment='right',
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                 fontsize=9)
 
         # График массы жидкости
         ax1.plot(times, masses)
@@ -142,13 +161,42 @@ class LPGSpillEvaporation:
 
         # График скорости испарения
         evaporation_rate = -np.gradient(masses, times)
-        ax2.plot(times[1:], evaporation_rate[1:])
+
+        # Заливка под кривой
+        ax2.fill_between(times[1:], evaporation_rate[1:], alpha=0.3, color='blue',
+                         label='Область испарения')
+
+        # Основная кривая
+        ax2.plot(times[1:], evaporation_rate[1:], color='blue', linewidth=2,
+                 label='Скорость испарения')
+
+        # Настройка оси Y в логарифмическом масштабе
+        ax2.set_yscale('log')
+
+        # Добавляем среднюю скорость испарения
+        mean_rate = np.mean(evaporation_rate[1:])
+        ax2.axhline(y=mean_rate, color='r', linestyle='--',
+                    label=f'Средняя скорость: {mean_rate:.2f} кг/с')
+
+        # Улучшаем оформление
         ax2.set_xlabel('Время, с')
         ax2.set_ylabel('Скорость испарения, кг/с')
-        ax2.grid(True)
-        ax2.set_title('Скорость испарения')
+        ax2.grid(True, which="both", ls="-", alpha=0.2)
+        ax2.grid(True, which="major", ls="-", alpha=0.5)
+        ax2.set_title('Скорость испарения (логарифмическая шкала)')
+        ax2.legend(loc='upper right')
+
+        # Добавляем аннотацию максимальной скорости
+        max_rate = np.max(evaporation_rate[1:])
+        ax2.annotate(f'Максимум: {max_rate:.2f} кг/с',
+                     xy=(times[1], max_rate),
+                     xytext=(10, 10),
+                     textcoords='offset points',
+                     bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.5),
+                     arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
 
         plt.tight_layout()
+        plt.savefig('plot_result')
         return fig
 
 
@@ -193,4 +241,3 @@ if __name__ == "__main__":
 
     # Построение графиков
     fig = model.plot_results(times, masses)
-    plt.savefig('plot_result')
