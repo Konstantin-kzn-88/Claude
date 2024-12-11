@@ -37,8 +37,6 @@ class LiquidSpreadModel:
         h = np.zeros((nt, self.nx))
         u = np.zeros((nt, self.nx))
         overflow_history = np.zeros(nt)
-        max_overflow_value = 0
-        max_overflow_reached = False
 
         # Начальные условия
         h[0, :self.barrier_idx] = np.where(self.x[:self.barrier_idx] <= self.R, self.h0, 0.0)
@@ -84,36 +82,13 @@ class LiquidSpreadModel:
                         overflow_volume = height_above * affected_width
                         overflow_percent = (overflow_volume / initial_volume) * 100
 
-                        # Обновляем максимальный перелив
-                        if overflow_percent > max_overflow_value:
-                            print(f"\nАнализ перелива:")
-                            print(f"Координаты области: {region_start * self.dx:.2f}-{region_end * self.dx:.2f} м")
-                            print(f"Максимальная высота: {height_at_barrier:.2f} м")
-                            print(f"Высота над обвалованием: {height_above:.2f} м")
-                            print(f"Расчетный перелив: {overflow_percent:.2f}%\n")
+                        # Обновляем значение перелива
+                        overflow_history[n + 1] = overflow_percent
 
-                        # Обновляем максимальный перелив
-                        if overflow_percent > max_overflow_value:
-                            max_overflow_value = overflow_percent
-                            max_overflow_reached = True
-                            print(f"Высота волны перед обвалованием: {height_at_barrier:.2f} м")
-                            print(f"Высота над обвалованием: {height_above:.2f} м")
-                            print(f"Перелив: {overflow_percent:.2f}%")
-
-                        # Расчет перелива
-                        if i == self.barrier_idx:
-                            energy = 0.5 * u_curr[i] ** 2 + self.g * height_above
-                            discharge_coef = 0.6
-                            overflow_velocity = discharge_coef * np.sqrt(2 * energy)
-
-                            # Распределение перелива
-                            cells_after = min(5, self.nx - i - 1)
-                            if cells_after > 0:
-                                distribution = np.exp(-np.arange(cells_after) / 2)
-                                distribution /= distribution.sum()
-                                for j in range(cells_after):
-                                    h[n + 1, i + 1 + j] += height_above * distribution[j]
-                                    u[n + 1, i + 1 + j] = overflow_velocity * distribution[j]
+                        print(f"\nАнализ перелива в момент t = {t[n]:.2f} с:")
+                        print(f"Высота волны: {height_at_barrier:.2f} м")
+                        print(f"Высота над обвалованием: {height_above:.2f} м")
+                        print(f"Процент перелива: {overflow_percent:.2f}%")
 
             # Граничные условия
             h[n + 1, 0] = h[n + 1, 1]
@@ -122,7 +97,6 @@ class LiquidSpreadModel:
             u[n + 1, -1] = u[n + 1, -2]
 
             h[n + 1] = np.maximum(h[n + 1], 0)
-            overflow_history[n + 1] = max_overflow_value
 
             # Проверка условия Куранта
             max_velocity = np.max(np.abs(u[n + 1]))
@@ -130,46 +104,44 @@ class LiquidSpreadModel:
             if courant > 0.5:
                 print(f"Warning: CFL = {courant:.3f} at t = {t[n]:.3f}")
 
-            if max_overflow_reached and max_overflow_value > 0:
-                # Заполняем оставшуюся историю перелива максимальным значением
-                overflow_history[n + 1:] = max_overflow_value
-                return t[:n + 2], h[:n + 2], u[:n + 2], overflow_history[:n + 2]
-
         return t, h, u, overflow_history
 
     def visualize(self, t: np.ndarray, h: np.ndarray, overflow_history: np.ndarray):
         """Визуализация результатов"""
         fig, ax = plt.subplots(figsize=(12, 8))
 
+        # Ищем максимальную высоту во всем массиве
+        global_max_height = np.max(h)
+        global_max_time = t[np.unravel_index(np.argmax(h), h.shape)[0]]
+
         # График высоты жидкости
         times_to_plot = np.linspace(0, len(t) - 1, 4).astype(int)
+        max_barrier_height = 0
 
-        print("\nВысоты волны в ключевые моменты времени:")
+        print("\nАнализ высот в разные моменты времени:")
         for i in times_to_plot:
+            # Строим график для текущего момента времени
             ax.plot(self.x, h[i], label=f't = {t[i]:.2f} с')
-            region = slice(max(0, self.barrier_idx - 20), min(self.barrier_idx + 5, self.nx))
-            max_h = np.max(h[i, region])
-            print(f"t = {t[i]:.2f} с: Максимальная высота = {max_h:.2f} м")
-            print(f"Значения высот в области {self.x[region][-5:]}:")
-            print(h[i, region][-5:])
+
+            # Анализируем высоты около обвалования
+            region = slice(max(0, self.barrier_idx - 20), self.barrier_idx + 1)
+            local_max = np.max(h[i, region])
+            max_barrier_height = max(max_barrier_height, local_max)
+            local_max_idx = region.start + np.argmax(h[i, region])
+
+            print(f"\nВремя t = {t[i]:.2f} с:")
+            print(f"Максимальная высота у обвалования: {local_max:.2f} м")
+            print(f"Расстояние до максимума: {self.x[local_max_idx]:.2f} м")
 
         # Добавляем обвалование
         barrier_x = self.x[self.barrier_idx]
         ax.vlines(barrier_x, 0, self.a, colors='r', linestyles='--', label='Обвалование')
         ax.hlines(self.a, barrier_x - 0.2, barrier_x + 0.2, colors='r', linestyles='--')
 
-        # Находим глобальный максимум
-        region = slice(max(0, self.barrier_idx - 20), min(self.barrier_idx + 5, self.nx))
-        max_height = np.max(h[:, region])
-        time_idx = np.unravel_index(np.argmax(h[:, region]), h[:, region].shape)[0]
-
-        print(f"\nГлобальный максимум:")
-        print(f"Максимальная высота: {max_height:.2f} м")
-        print(f"Время: {t[time_idx]:.2f} с")
-
         # Добавляем текстовую информацию
-        info_text = (f'Максимальная высота у обвалования: {max_height:.2f} м\n'
-                     f'Высота над обвалованием: {max(0, max_height - self.a):.2f} м\n'
+        info_text = (f'Глобальный максимум: {global_max_height:.2f} м\n'
+                     f'Максимум у обвалования: {max_barrier_height:.2f} м\n'
+                     f'Время максимума: {global_max_time:.2f} с\n'
                      f'Максимальный перелив: {np.max(overflow_history):.2f}%')
 
         ax.text(0.02, 0.98, info_text,
@@ -177,7 +149,8 @@ class LiquidSpreadModel:
                 verticalalignment='top',
                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-        ax.set_ylim(-0.1, max(self.h0 * 1.2, max_height * 1.2))
+        # Настройка графика
+        ax.set_ylim(-0.1, max(self.h0 * 1.2, self.a * 1.5))
         ax.set_xlabel('Расстояние (м)')
         ax.set_ylabel('Высота жидкости (м)')
         ax.set_title('Профиль высоты жидкости')
@@ -186,7 +159,6 @@ class LiquidSpreadModel:
 
         plt.tight_layout()
         plt.savefig('liquid_spread_results.png', dpi=300, bbox_inches='tight')
-        plt.close()
 
 
 if __name__ == "__main__":
@@ -194,7 +166,7 @@ if __name__ == "__main__":
     R = 5.0  # ширина резервуара
     h0 = 6.0  # начальная высота жидкости
     a = 1.0  # высота обвалования
-    b = 10.0  # расстояние до обвалования
+    b = 9.0  # расстояние до обвалования
 
     # Создаем модель
     model = LiquidSpreadModel(R=R, h0=h0, a=a, b=b, dx=0.1)
