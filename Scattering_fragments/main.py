@@ -229,11 +229,11 @@ def plot_results(results, save_path='fragment_analysis.png'):
 # Пример использования
 def example_calculation():
     params = {
-        'P0': 8,  # 8 атм
+        'P0': 2,  # 8 атм
         'V0': 100,  # 100 м3
         'M_ob': 4000,  # 4000 кг масса оболочки
         'rho_ob': 7850,  # плотность стали
-        'n_fragments': 5,  # количество осколков
+        'n_fragments': 3,  # количество осколков
         'is_spherical': False  # цилиндрический резервуар
     }
 
