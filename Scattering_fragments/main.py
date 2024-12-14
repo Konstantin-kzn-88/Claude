@@ -10,14 +10,14 @@ import matplotlib.pyplot as plt
 def calculate_initial_velocity(P0, M_ob, rho_ob, V0, is_spherical=False):
     """
     Расчет начальной скорости осколков по официальной методике
-    P0 - избыточное давление (атм)
+    P0 - избыточное давление (МПа)
     M_ob - масса оболочки (кг)
     rho_ob - плотность материала оболочки (кг/м3)
     V0 - объем сосуда (м3)
     is_spherical - сферический (True) или цилиндрический (False) сосуд
     """
-    # Переводим атмосферы в Паскали
-    P0_pa = P0 * 101325
+    # Переводим МПа в Паскали
+    P0_pa = P0 * 1e6
 
     # Для цилиндрического резервуара
     if not is_spherical:
@@ -30,11 +30,11 @@ def calculate_initial_velocity(P0, M_ob, rho_ob, V0, is_spherical=False):
 def calculate_effective_energy(P0, V0):
     """
     Расчет эффективной энергии взрыва резервуара
-    P0 - избыточное давление (атм)
+    P0 - избыточное давление (МПа)
     V0 - объем сосуда (м3)
     """
-    # Переводим атмосферы в Паскали
-    P0_pa = P0 * 101325
+    # Переводим МПа в Паскали
+    P0_pa = P0 * 1e6
     return 0.6 * P0_pa * V0
 
 
@@ -187,12 +187,23 @@ def calculate_trajectories(U0, W, angles=None):
     return trajectories
 
 
-def plot_results(results, save_path='fragment_analysis.png'):
+def plot_results(results, params, save_path='fragment_analysis.png'):
     """
-    Построение графиков анализа разлета осколков
+    Построение графиков анализа разлета осколков с отображением исходных данных
     """
     # Создаем фигуру с подграфиками
     plt.figure(figsize=(15, 10))
+
+    # Подготовка текста с исходными данными
+    input_params = (
+        f"Исходные данные:\n"
+        f"P₀ = {params['P0']} МПа\n"
+        f"V₀ = {params['V0']} м³\n"
+        f"M = {params['M_ob']} кг\n"
+        f"ρ = {params['rho_ob']} кг/м³\n"
+        f"N = {params['n_fragments']} шт\n"
+        f"Тип: {'сферический' if params['is_spherical'] else 'цилиндрический'}"
+    )
 
     # График траекторий
     plt.subplot(121)
@@ -208,6 +219,13 @@ def plot_results(results, save_path='fragment_analysis.png'):
     plt.ylabel('Высота (м)')
     plt.grid(True)
     plt.legend(title='Угол вылета')
+
+    # Добавляем текст с исходными данными
+    plt.text(0.98, 0.98, input_params,
+             transform=plt.gca().transAxes,
+             verticalalignment='top',
+             horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
     # График вероятности поражения
     plt.subplot(122)
@@ -229,11 +247,11 @@ def plot_results(results, save_path='fragment_analysis.png'):
 # Пример использования
 def example_calculation():
     params = {
-        'P0': 2,  # 8 атм
+        'P0': 0.8,  # 0.8 МПа
         'V0': 100,  # 100 м3
         'M_ob': 4000,  # 4000 кг масса оболочки
         'rho_ob': 7850,  # плотность стали
-        'n_fragments': 3,  # количество осколков
+        'n_fragments': 5,  # количество осколков
         'is_spherical': False  # цилиндрический резервуар
     }
 
@@ -247,7 +265,7 @@ def example_calculation():
     print(f"Максимальная дальность разлета: {results['max_distance']:.1f} м")
 
     # Построение и сохранение графиков
-    plot_results(results)
+    plot_results(results, params)
 
 
 if __name__ == "__main__":
