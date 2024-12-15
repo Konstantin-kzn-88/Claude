@@ -5,81 +5,123 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
-def simulate_dispersion():
-    # Параметры сетки
-    Nx, Ny = 100, 100
-    Nt = 50
-    D = 0.1
-    vx = 2.0
-    porosity = 0.3  # Пористость препятствия (0 - непроницаемое, 1 - полностью проницаемое)
+class HeavyGasDispersion:
+    def __init__(self, Q, T_amb, wind_speed, stability_class, z0, duration):
+        # Параметры выброса
+        self.Q = Q
+        self.T_amb = T_amb + 273.15
+        self.wind_speed = wind_speed
+        self.stability_class = stability_class
+        self.z0 = z0
+        self.duration = duration
 
-    # Создаем массивы
-    concentration = np.zeros((Nt, Ny, Nx))
-    obstacle = np.zeros((Ny, Nx))
+        # Параметры H2S
+        self.M = 34.08
+        self.R = 8.314
 
-    # Создаем пористое препятствие в центре
-    for i in range(Ny):
-        for j in range(Nx):
-            if (i - Ny / 2) ** 2 + (j - Nx / 2) ** 2 <= (Nx / 8) ** 2:
-                # Устанавливаем степень проницаемости препятствия
-                obstacle[i, j] = 1 - porosity
+        # Расчет плотностей
+        self.rho_air = 353.18 / self.T_amb
+        self.rho_gas = (self.M * 101325) / (self.R * self.T_amb) / 1000
+        self.density_ratio = self.rho_gas / self.rho_air
 
-    # Начальное облако слева
-    concentration[0, Ny // 3:2 * Ny // 3, Nx // 6:Nx // 3] = 1.0
+        # Параметры модели
+        self.g = 9.81
+        self.initial_height = 3.0  # начальная высота выброса
 
-    # Параметры расчета
-    dt = 1
-    dx = 1
-    r = D * dt / (dx * dx)
+    def calculate_gravity_spreading(self, x):
+        """Расчет растекания под действием силы тяжести"""
+        if x <= 0:
+            return 0
 
-    # Моделирование
-    for t in range(Nt - 1):
-        for i in range(1, Ny - 1):
-            for j in range(1, Nx - 1):
-                # Теперь вещество частично проходит через препятствие
-                local_concentration = concentration[t, i, j] * (1 - obstacle[i, j])
+        # Характерный размер растекания
+        spread = np.sqrt((self.density_ratio - 1) * self.g * self.initial_height * x / self.wind_speed ** 2)
+        return max(spread, 0.1)
 
-                # Диффузия (с учетом пористости)
-                diff_x = (concentration[t, i, j + 1] + concentration[t, i, j - 1] - 2 * local_concentration) * (
-                            1 - obstacle[i, j])
-                diff_y = (concentration[t, i + 1, j] + concentration[t, i - 1, j] - 2 * local_concentration) * (
-                            1 - obstacle[i, j])
+    def calculate_concentration(self, x, y, z):
+        """Расчет концентрации с учетом эффектов тяжелого газа"""
+        if x <= 0:
+            return 0
 
-                # Конвекция (с учетом пористости)
-                local_vx = vx * (1 - obstacle[i, j])  # Скорость уменьшается в пористой среде
-                if Nx / 2 - Nx / 6 < j < Nx / 2 + Nx / 6:
-                    dy = i - Ny / 2
-                    local_vx *= np.exp(-abs(dy) / (Ny / 8))
+        # Расчет начального растекания
+        spread_height = self.initial_height * np.exp(-0.2 * x / self.initial_height)
+        spread_width = self.calculate_gravity_spreading(x)
 
-                conv = -local_vx * (concentration[t, i, j] - concentration[t, i, j - 1]) / dx
+        # Модифицированные параметры дисперсии
+        sigma_y = spread_width * (1 + 0.1 * x / spread_width) ** 0.5
+        sigma_z = spread_height * (1 + 0.15 * x / self.initial_height) ** 0.5
 
-                # В пористой среде часть вещества задерживается
-                retention = obstacle[i, j] * local_concentration * 0.1
+        # Учет прижимания к земле
+        effective_height = self.initial_height * np.exp(-0.3 * x / self.initial_height)
 
-                concentration[t + 1, i, j] = np.clip(
-                    local_concentration + r * (diff_x + diff_y) + dt * conv - retention,
-                    0, 1
-                )
+        # Расчет концентрации с учетом отражения от поверхности и прижимания
+        C = (self.Q / (2 * np.pi * self.wind_speed * sigma_y * sigma_z) *
+             np.exp(-0.5 * (y / sigma_y) ** 2) *
+             (np.exp(-0.5 * ((z - effective_height) / sigma_z) ** 2) +
+              np.exp(-0.5 * ((z + effective_height) / sigma_z) ** 2)))
 
-    return concentration, obstacle
+        # Учет эффекта "обрезания" на границах облака
+        edge_factor = 1 / (1 + np.exp((np.abs(z) - spread_height * 1.5) / 0.1))
+
+        return C * edge_factor
+
+    def calculate_toxdose(self, x, y, z):
+        """Расчет токсодозы"""
+        C = self.calculate_concentration(x, y, z)
+        toxdose = C * self.duration / 60  # перевод в мг*мин/л
+        return toxdose
 
 
-# Моделируем
-concentration, obstacle = simulate_dispersion()
+def plot_results(model, x_range, z_range, output_file='toxdose_distribution.png'):
+    y_pos = 0
+    X, Z = np.meshgrid(x_range, z_range)
+    C = np.zeros_like(X)
 
-# Создаем график
-plt.figure(figsize=(12, 3))
+    for i in range(len(z_range)):
+        for j in range(len(x_range)):
+            C[i, j] = model.calculate_toxdose(x_range[j], y_pos, z_range[i])
 
-# Показываем 4 момента времени
-for i, t in enumerate([0, 15, 30, 45]):
-    plt.subplot(1, 4, i + 1)
-    plt.imshow(obstacle, cmap='YlOrBr')
-    plt.imshow(concentration[t], alpha=0.7, cmap='Blues')
-    plt.title(f'Время: {t * 0.1:.1f} с')
-    plt.axis('off')
+    plt.figure(figsize=(12, 8))
 
-plt.tight_layout()
-plt.savefig('porous_dispersion.png')
-plt.close()
+    # Настройка цветовой схемы для соответствия примеру
+    levels = np.linspace(0, 5, 20)
+    contour = plt.contourf(X, Z, C, levels=levels, cmap='jet')
+    plt.colorbar(contour, label='Токсодоза (мг*мин/л)')
 
-print("График сохранен в файл 'porous_dispersion.png'")
+    # Добавление линии пороговой токсодозы
+    plt.contour(X, Z, C, levels=[1.0], colors='red', linewidths=2,
+                linestyles='dashed', label='Пороговая токсодоза')
+
+    plt.xlabel('Расстояние (м)')
+    plt.ylabel('Высота (м)')
+    plt.title('Распределение токсодозы H2S')
+    plt.grid(True)
+
+    # Настройка осей для соответствия примеру
+    plt.ylim(-5, 12.5)
+    plt.xlim(0, 13)
+
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    return output_file
+
+
+if __name__ == "__main__":
+    # Параметры задачи
+    Q = 5  # кг/с
+    T_amb = 30  # °C
+    wind_speed = 1  # м/с
+    stability_class = 'F'
+    z0 = 0.1  # м (трава)
+    duration = 600  # с
+
+    # Создание модели
+    model = HeavyGasDispersion(Q, T_amb, wind_speed, stability_class, z0, duration)
+
+    # Расчетная область
+    x_range = np.linspace(0.1, 13, 100)
+    z_range = np.linspace(-5, 12.5, 100)
+
+    # Построение и сохранение графика
+    output_file = plot_results(model, x_range, z_range)
+    print(f"График сохранен в файл: {output_file}")
