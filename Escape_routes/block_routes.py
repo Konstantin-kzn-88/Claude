@@ -1,266 +1,367 @@
-import math
 import numpy as np
+import matplotlib
+import json
+from typing import Dict, Optional, List
+from dataclasses import dataclass
+import os
+
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 
-class FireBlockingTime:
-    def __init__(self, room_width, room_length, room_height, h_pl=0, delta=0,
-                 initial_temp=20, material_type="1.1"):
+@dataclass
+class ToxicityParams:
+    """Параметры токсичности продуктов горения"""
+    co_yield: float  # выход CO, кг/кг
+    co2_yield: float  # выход CO2, кг/кг
+    hcl_yield: float  # выход HCl, кг/кг
+
+
+@dataclass
+class LiquidFuelParams:
+    """Параметры разлива жидкого топлива"""
+    density: float  # плотность топлива, кг/м³
+    thickness: float  # средняя толщина разлива, м
+    spread_rate: float  # скорость растекания, м²/с
+
+
+class FireHazardCalculator:
+    def __init__(self, room_params: Dict, material_params: Dict,
+                 toxic_params: Optional[ToxicityParams] = None,
+                 liquid_params: Optional[LiquidFuelParams] = None):
         """
-        Инициализация параметров помещения
+        Инициализация калькулятора пожарной опасности.
 
         Args:
-            room_width (float): Ширина помещения, м
-            room_length (float): Длина помещения, м
-            room_height (float): Высота помещения, м
-            h_pl (float): Высота площадки над полом, м
-            delta (float): Разность высот пола, м
-            initial_temp (float): Начальная температура воздуха, °C
-            material_type (str): Тип помещения по таблице 1
+            room_params: Параметры помещения
+            material_params: Параметры горючего материала
+            toxic_params: Параметры токсичности (опционально)
+            liquid_params: Параметры жидкого топлива (опционально)
         """
-        self.width = room_width
-        self.length = room_length
-        self.H = room_height
-        self.h_pl = h_pl
-        self.delta = delta
-        self.t0 = initial_temp
+        # Room parameters
+        self.volume = room_params['volume']  # м³
+        self.vent_area = room_params['vent_area']  # м²
+        self.init_temp = room_params['init_temp']  # K
+        self.init_burn_area = room_params['burn_area']  # м²
+        self.room_height = room_params.get('height', 3.0)  # м
+        self.floor_area = room_params.get('floor_area', self.volume / self.room_height)  # м²
 
-        # Параметры по типу помещения из таблицы 1
-        self.fire_props = {
-            # 1. Учебные аудитории
-            "1.1": {  # Лекционная аудитория
-                "name": "Лекционная аудитория",
-                "Qn": 14.0, "psi": 0.0137, "v": 0.015, "Dm": 47.7,
-                "LCO2": 1.478, "LCO": 0.03, "LHCl": 0.0058, "LO2": 1.369
-            },
-            "1.2": {  # Аудитория для практических занятий
-                "name": "Аудитория для практических занятий",
-                "Qn": 14.0, "psi": 0.0137, "v": 0.015, "Dm": 47.7,
-                "LCO2": 1.478, "LCO": 0.03, "LHCl": 0.0058, "LO2": 1.369
-            },
-            # 2. Компьютерные классы
-            "2.0": {  # Компьютерный класс (15 комп)
-                "name": "Компьютерный класс",
-                "Qn": 20.9, "psi": 0.0076, "v": 0.0125, "Dm": 327.0,
-                "LCO2": 0.375, "LCO": 0.0556, "LHCl": 0.0054, "LO2": 1.95
-            },
-            # 3. Спортивные помещения
-            "3.1": {  # Большой спортивный зал
-                "name": "Большой спортивный зал",
-                "Qn": 13.9, "psi": 0.0225, "v": 0.0151, "Dm": 64.1,
-                "LCO2": 0.724, "LCO": 0.0205, "LHCl": 0.0005, "LO2": 1.191
-            },
-            "3.5": {  # Раздевалка
-                "name": "Раздевалка",
-                "Qn": 23.3, "psi": 0.013, "v": 0.0835, "Dm": 129.0,
-                "LCO2": 0.467, "LCO": 0.0145, "LHCl": 0.0, "LO2": 3.698
-            },
-            # 4. Специализированные учебные аудитории
-            "4.1": {  # Военная кафедра
-                "name": "Военная кафедра",
-                "Qn": 14.0, "psi": 0.0152, "v": 0.0163, "Dm": 53.0,
-                "LCO2": 1.423, "LCO": 0.023, "LHCl": 0.0001, "LO2": 1.218
-            },
-            # 5. Учебно-вспомогательные помещения
-            "5.3": {  # Читальный зал
-                "name": "Читальный зал",
-                "Qn": 14.5, "psi": 0.011, "v": 0.0103, "Dm": 49.5,
-                "LCO2": 1.1087, "LCO": 0.0974, "LHCl": 0.0, "LO2": 1.154
-            },
-            "5.6": {  # Препараторская
-                "name": "Препараторская",
-                "Qn": 26.6, "psi": 0.033, "v": 812.8, "Dm": 88.1,
-                "LCO2": 1.912, "LCO": 0.262, "LHCl": 0.0, "LO2": 2.304
-            },
-            # 6. Административные помещения
-            "6.1": {  # Кабинет руководителя
-                "name": "Кабинет руководителя",
-                "Qn": 14.0, "psi": 0.021, "v": 0.022, "Dm": 53.0,
-                "LCO2": 1.434, "LCO": 0.043, "LHCl": 0.0, "LO2": 1.161
-            },
-            # 7. Научно-исследовательские помещения
-            "7.1": {  # Аспирантская
-                "name": "Аспирантская",
-                "Qn": 14.0, "psi": 0.0129, "v": 0.042, "Dm": 53.0,
-                "LCO2": 0.642, "LCO": 0.0317, "LHCl": 0.0, "LO2": 1.161
-            },
-            # 8. Служебные помещения
-            "8.1": {  # АТС
-                "name": "АТС",
-                "Qn": 31.7, "psi": 0.0233, "v": 0.0068, "Dm": 487.0,
-                "LCO2": 1.295, "LCO": 0.097, "LHCl": 0.0109, "LO2": 2.64
-            },
-            "8.8": {  # Гардероб
-                "name": "Гардероб",
-                "Qn": 23.3, "psi": 0.013, "v": 0.0835, "Dm": 129.0,
-                "LCO2": 0.467, "LCO": 0.0145, "LHCl": 0.0, "LO2": 3.698
-            },
-            "8.11": {  # Коридор, лестничная клетка, холл
-                "name": "Коридор, лестничная клетка, холл",
-                "Qn": 14.7, "psi": 0.0145, "v": 0.0108, "Dm": 82.0,
-                "LCO2": 1.285, "LCO": 0.0022, "LHCl": 0.006, "LO2": 1.437
-            },
-            "8.12": {  # Котельная (нефть)
-                "name": "Котельная (нефть)",
-                "Qn": 44.2, "psi": 0.02410, "v": 885.0, "Dm": 438.0,
-                "LCO2": 3.104, "LCO": 0.161, "LHCl": 0.0, "LO2": 3.24
-            },
-            "8.15": {  # Подсобное помещение
-                "name": "Подсобное помещение",
-                "Qn": 13.8, "psi": 0.0344, "v": 0.0465, "Dm": 270.0,
-                "LCO2": 0.203, "LCO": 0.0022, "LHCl": 0.014, "LO2": 1.03
-            },
-            "8.19": {  # Серверная
-                "name": "Серверная",
-                "Qn": 30.7, "psi": 0.0244, "v": 0.0071, "Dm": 521.0,
-                "LCO2": 0.65, "LCO": 0.1295, "LHCl": 0.0202, "LO2": 2.19
-            }
+        # Material parameters
+        self.heat_value = material_params['heat_value']  # кДж/кг
+        self.smoke_value = material_params['smoke_value']  # Нп×м²/кг
+        self.burn_rate = material_params['burn_rate']  # кг/(м²×с)
+
+        # Liquid fuel parameters
+        self.liquid_params = liquid_params
+
+        # Toxicity parameters
+        self.toxic_params = toxic_params
+
+        # Constants
+        self.cp = 1.005  # удельная теплоемкость воздуха, кДж/(кг·К)
+        self.rho = 1.29  # начальная плотность воздуха, кг/м³
+        self.heat_loss = 0.3  # коэффициент потерь тепла (уменьшен для бензина)
+        self.burn_eff = 0.97  # полнота сгорания (увеличена для бензина)
+
+        # Critical values
+        self.crit_temp = 343.15  # K (70°C)
+        self.crit_visibility = 20  # м
+        self.crit_co = 0.11  # кг/м³
+        self.crit_co2 = 0.11  # кг/м³
+        self.crit_hcl = 0.058  # кг/м³
+
+    def calculate_burn_area(self, t: float) -> float:
+        """
+        Расчет площади горения с учетом растекания жидкости.
+
+        Args:
+            t: Время от начала пожара, с
+
+        Returns:
+            float: Площадь горения, м²
+        """
+        if not self.liquid_params:
+            return self.init_burn_area
+
+        # Расчет площади разлива
+        spread_area = min(
+            self.init_burn_area + self.liquid_params.spread_rate * t,
+            self.floor_area  # Ограничение площадью помещения
+        )
+
+        return spread_area
+
+    def burned_mass(self, t: float) -> float:
+        """
+        Расчет массы выгоревшего материала.
+
+        Args:
+            t: Время от начала пожара, с
+
+        Returns:
+            float: Масса выгоревшего материала, кг
+        """
+        if self.liquid_params:
+            # Интегрирование по времени с учетом изменяющейся площади
+            times = np.linspace(0, t, 100)
+            areas = [self.calculate_burn_area(tau) for tau in times]
+            dt = t / 99
+            return sum(self.burn_rate * area * dt for area in areas)
+
+        return self.burn_rate * self.init_burn_area * t
+
+    def temperature(self, t: float) -> float:
+        """
+        Расчет температуры в помещении.
+
+        Args:
+            t: Время от начала пожара, с
+
+        Returns:
+            float: Температура в помещении, K
+        """
+        # Мощность тепловыделения с учетом изменяющейся площади
+        burn_area = self.calculate_burn_area(t)
+        Q = self.heat_value * self.burn_rate * burn_area * (1 - self.heat_loss) * self.burn_eff
+
+        # Учет теплоемкости воздуха и ограждающих конструкций
+        V_eff = self.volume * 1.3  # Уменьшен коэффициент для бензина
+
+        # Коэффициент газообмена
+        k_vent = np.sqrt(self.vent_area / self.volume) * 0.6  # Увеличен для бензина
+
+        # Максимальная температура пожара (увеличена для бензина)
+        T_max = 1373.15  # ~1100°C
+
+        # Расчет приращения температуры с учетом ограничения роста
+        dT_max = T_max - self.init_temp
+        dT_current = (Q * t) / (self.cp * self.rho * V_eff) * (1 - np.exp(-k_vent * t))
+
+        # Корректировка с учетом более быстрого роста для бензина
+        dT = dT_max * (1 - np.exp(-1.2 * dT_current / dT_max))
+
+        # Учет меньших теплопотерь при горении бензина
+        heat_loss_factor = 1 + 0.1 * (dT / dT_max)
+        dT = dT / heat_loss_factor
+
+        return self.init_temp + dT
+
+    def visibility(self, t: float) -> float:
+        """Расчет потери видимости"""
+        return self.smoke_value * self.burned_mass(t) / (self.volume * self.crit_visibility)
+
+    def toxic_concentrations(self, t: float) -> Dict[str, float]:
+        """Расчет концентраций токсичных веществ"""
+        if not self.toxic_params:
+            return {}
+
+        burned = self.burned_mass(t)
+        return {
+            'CO': self.toxic_params.co_yield * burned / self.volume,
+            'CO2': self.toxic_params.co2_yield * burned / self.volume,
+            'HCl': self.toxic_params.hcl_yield * burned / self.volume
         }
 
-        # Константы
-        self.cp = 0.001  # МДж/(кг·К), удельная изобарная теплоемкость воздуха
-        self.phi = 0.3  # коэффициент теплопотерь
-        self.Xox_a = 0.21  # начальная концентрация кислорода
-        self.alpha = 0.3  # коэффициент отражения предметов
-        self.E = 50  # начальная освещенность, лк
-        self.l_pr = 20  # предельная дальность видимости, м
-
-        # Критические значения ОФП
-        self.t_cr = 70  # °C
-        self.X_CO2_cr = 0.11  # кг/м³
-        self.X_CO_cr = 1.16e-3  # кг/м³
-        self.X_HCl_cr = 23e-6  # кг/м³
-
-        # Установка параметров материала
-        self.props = self.fire_props[material_type]
-
-        # Расчет параметров помещения
-        self.n = 3  # показатель степени (для кругового развития пожара)
-        self.z = self._calc_z()
-        self.V = self._calc_V()
-        self.eta = self._calc_eta()
-        self.A = self._calc_A()
-        self.B = self._calc_B()
-
-    def _calc_h(self):
-        """Расчет высоты рабочей зоны"""
-        return self.h_pl + 1.7 - 0.5 * self.delta
-
-    def _calc_z(self):
-        """Расчет параметра z"""
-        h = self._calc_h()
-        if self.H <= 6:
-            return (h / self.H) * math.exp(1.4 * h / self.H)
-        return 1.0
-
-    def _calc_V(self):
-        """Расчет свободного объема помещения"""
-        return 0.8 * self.width * self.length * self.H
-
-    def _calc_A(self):
-        """Расчет параметра A для кругового распространения пожара"""
-        return 1.05 * self.props["psi"] * self.props["v"] ** 2
-
-    def _calc_eta(self):
-        """Расчет коэффициента полноты горения"""
-        return 0.63 + 0.2 * self.Xox_a + 1500 * self.Xox_a ** 6
-
-    def _calc_B(self):
-        """Расчет комплекса B"""
-        return 353 * self.cp * self.V / ((1 - self.phi) * self.eta * self.props["Qn"])
-
-    def calc_temperature_time(self):
-        """Расчет критического времени по повышенной температуре"""
-        try:
-            arg = 1 + (70 - self.t0) / (273 + self.t0) * self.z
-            if arg <= 0:
-                return float('inf')
-            base = self.B / self.A * math.log(arg)
-            if base < 0:
-                return float('inf')
-            return base ** (1 / self.n)
-        except:
-            return float('inf')
-
-    def calc_visibility_time(self):
-        """Расчет критического времени по потере видимости"""
-        try:
-            ln_arg = 1 - (self.V * math.log(1.05 * self.alpha * self.E)) / \
-                     (self.l_pr * self.B * self.props["Dm"] * self.z)
-            if ln_arg <= 0:
-                return float('inf')
-            base = self.B / self.A * math.log(ln_arg) ** (-1)
-            if base < 0:
-                return float('inf')
-            return base ** (1 / self.n)
-        except:
-            return float('inf')
-
-    def calc_oxygen_time(self):
-        """Расчет критического времени по пониженному содержанию кислорода"""
-        try:
-            ln_arg = 1 - 0.044 / ((self.B * self.props["LO2"] / self.V + 0.27) * self.z)
-            if ln_arg <= 0:
-                return float('inf')
-            base = self.B / self.A * math.log(ln_arg) ** (-1)
-            if base < 0:
-                return float('inf')
-            return base ** (1 / self.n)
-        except:
-            return float('inf')
-
-    def calc_toxic_time(self, X_cr, L):
-        """Расчет критического времени по токсичным продуктам"""
-        try:
-            ln_arg = 1 - (self.V * X_cr) / (self.B * L * self.z)
-            if ln_arg <= 0:
-                return float('inf')
-            base = self.B / self.A * math.log(ln_arg) ** (-1)
-            if base < 0:
-                return float('inf')
-            return base ** (1 / self.n)
-        except:
-            return float('inf')
-
-    def calculate_blocking_time(self):
-        """Расчет времени блокирования путей эвакуации"""
-        times = {
-            "temperature": self.calc_temperature_time(),
-            "visibility": self.calc_visibility_time(),
-            "oxygen": self.calc_oxygen_time(),
-            "CO2": self.calc_toxic_time(self.X_CO2_cr, self.props["LCO2"]),
-            "CO": self.calc_toxic_time(self.X_CO_cr, self.props["LCO"]),
-            "HCl": self.calc_toxic_time(self.X_HCl_cr, self.props["LHCl"])
+    # Остальные методы остаются без изменений
+    def calculate_blocking_time(self, t_max: float = 300, dt: float = 1) -> Dict:
+        """Расчет времени блокирования по всем факторам"""
+        times = np.arange(0, t_max, dt)
+        result = {
+            'temperature_time': None,
+            'visibility_time': None,
+            'co_time': None,
+            'co2_time': None,
+            'hcl_time': None
         }
 
-        # Отфильтруем бесконечные значения
-        finite_times = {k: v for k, v in times.items() if v != float('inf')}
+        for t in times:
+            temp = self.temperature(t)
+            vis = self.visibility(t)
 
-        if finite_times:
-            min_time = min(finite_times.values())
-            times["minimum"] = min_time
-        else:
-            times["minimum"] = float('inf')
+            if self.toxic_params:
+                tox = self.toxic_concentrations(t)
 
-        return times
+                if result['co_time'] is None and tox['CO'] >= self.crit_co:
+                    result['co_time'] = t
+                if result['co2_time'] is None and tox['CO2'] >= self.crit_co2:
+                    result['co2_time'] = t
+                if result['hcl_time'] is None and tox['HCl'] >= self.crit_hcl:
+                    result['hcl_time'] = t
+
+            if result['temperature_time'] is None and temp >= self.crit_temp:
+                result['temperature_time'] = t
+
+            if result['visibility_time'] is None and vis >= 1.0:
+                result['visibility_time'] = t
+
+            all_found = all(
+                (result[key] is not None if key != 'blocking_time' else True)
+                for key in result.keys()
+                if key not in ['co_time', 'co2_time', 'hcl_time']
+                or (self.toxic_params and key == 'co_time')
+                or (self.toxic_params and key == 'co2_time')
+                or (self.toxic_params and key == 'hcl_time')
+            )
+
+            if all_found:
+                break
+
+        valid_times = [t for t in result.values() if t is not None]
+        result['blocking_time'] = min(valid_times) if valid_times else None
+
+        return result
+
+    def save_results(self, results: Dict, filename: str = 'fire_results.json') -> None:
+        """
+        Сохранение результатов расчета в файл.
+
+        Args:
+            results: Результаты расчета
+            filename: Имя файла для сохранения
+        """
+        # Конвертируем numpy типы в обычные Python типы
+        serializable_results = {}
+        for key, value in results.items():
+            if isinstance(value, np.integer):
+                serializable_results[key] = int(value)
+            elif isinstance(value, np.floating):
+                serializable_results[key] = float(value)
+            else:
+                serializable_results[key] = value
+
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(serializable_results, f, indent=4, ensure_ascii=False)
+
+    def plot_dynamics(self, t_max: float = 300, save_path: str = 'fire_dynamics.png') -> None:
+        """Построение графиков динамики ОФП"""
+        times = np.linspace(0, t_max, 300)
+        temps = [self.temperature(t) - 273.15 for t in times]  # перевод в °C
+        visibilities = [self.visibility(t) for t in times]
+        areas = [self.calculate_burn_area(t) for t in times]  # Добавлен график площади
+
+        n_plots = 4 if self.toxic_params else 3  # Увеличено количество графиков
+        fig, axs = plt.subplots(n_plots, 1, figsize=(10, 4 * n_plots))
+
+        # График площади горения
+        axs[0].plot(times, areas, 'g-', label='Площадь горения')
+        axs[0].set_xlabel('Время, с')
+        axs[0].set_ylabel('Площадь, м²')
+        axs[0].grid(True)
+        axs[0].legend()
+
+        # График температуры
+        axs[1].plot(times, temps, 'r-', label='Температура')
+        axs[1].axhline(y=70, color='r', linestyle='--', alpha=0.5, label='Критическое значение')
+        axs[1].set_xlabel('Время, с')
+        axs[1].set_ylabel('Температура, °C')
+        axs[1].grid(True)
+        axs[1].legend()
+
+        # График задымления
+        axs[2].plot(times, visibilities, 'b-', label='Задымление')
+        axs[2].axhline(y=1.0, color='b', linestyle='--', alpha=0.5, label='Критическое значение')
+        axs[2].set_xlabel('Время, с')
+        axs[2].set_ylabel('Относительная задымленность')
+        axs[2].grid(True)
+        axs[2].legend()
+
+        # График токсичных веществ
+        if self.toxic_params:
+            tox_data = [self.toxic_concentrations(t) for t in times]
+            co_values = [d['CO'] for d in tox_data]
+            co2_values = [d['CO2'] for d in tox_data]
+            hcl_values = [d['HCl'] for d in tox_data]
+
+            axs[3].plot(times, co_values, 'g-', label='CO')
+            axs[3].plot(times, co2_values, 'm-', label='CO2')
+            axs[3].plot(times, hcl_values, 'y-', label='HCl')
+            axs[3].axhline(y=self.crit_co, color='g', linestyle='--', alpha=0.5)
+            axs[3].axhline(y=self.crit_co2, color='m', linestyle='--', alpha=0.5)
+            axs[3].axhline(y=self.crit_hcl, color='y', linestyle='--', alpha=0.5)
+            axs[3].set_xlabel('Время, с')
+            axs[3].set_ylabel('Концентрация, кг/м³')
+            axs[3].grid(True)
+            axs[3].legend()
+
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.close()
 
 
-# Пример использования
-if __name__ == "__main__":
+def main():
     # Параметры помещения
-    room = FireBlockingTime(
-        room_width=4.0,  # ширина помещения 4 м
-        room_length=5.0,  # длина помещения 5 м
-        room_height=3.0,  # высота помещения 3 м
-        material_type="1.1"  # тип помещения - лекционная аудитория
+    room = {
+        'volume': 20*30*6,  # м³
+        'vent_area': 0.001,  # м²
+        'init_temp': 293,  # K
+        'burn_area': 1.0,  # м² (начальная площадь пролива)
+        'height': 6.0,  # м
+        'floor_area': 20*30  # м² (площадь пола помещения)
+    }
+
+    # Параметры бензина
+    gasoline = {
+        'heat_value': 44000,  # кДж/кг
+        'smoke_value': 236,  # Нп×м²/кг
+        'burn_rate': 0.06  # кг/(м²×с)
+    }
+
+    # Параметры токсичности для бензина
+    toxic = ToxicityParams(
+        co_yield=0.1094,  # кг/кг
+        co2_yield=3.0,  # кг/кг
+        hcl_yield=0.0  # кг/кг (для бензина нет)
     )
 
-    # Расчет времени блокирования
-    blocking_times = room.calculate_blocking_time()
+    # Параметры разлива
+    liquid = LiquidFuelParams(
+        density=750,  # кг/м³
+        thickness=0.02,  # м (5 мм)
+        spread_rate=0.4  # м²/с
+    )
 
-    # Вывод результатов
-    print("Время блокирования по ОФП (секунды):")
-    for factor, time in blocking_times.items():
-        if time == float('inf'):
-            print(f"{factor}: не представляет опасности")
+    # Создаем калькулятор
+    calc = FireHazardCalculator(room, gasoline, toxic, liquid)
+
+    # Рассчитываем время блокирования
+    results = calc.calculate_blocking_time()
+
+    # Выводим результаты
+    print("\nРезультаты расчета пожара пролива бензина:")
+    print(f"Начальная площадь пролива: {room['burn_area']:.1f} м²")
+    print(f"Скорость распространения: {liquid.spread_rate:.1f} м²/с")
+
+    for factor, time in results.items():
+        if time is not None:
+            if factor == 'blocking_time':
+                print(f"\nМинимальное время блокирования: {time:.1f} с")
+            else:
+                print(f"Время блокирования по {factor}: {time:.1f} с")
         else:
-            print(f"{factor}: {time:.2f}")
+            print(f"Критическое значение по {factor} не достигнуто")
+
+    # Выводим дополнительную информацию
+    t_block = results['blocking_time']
+    if t_block is not None:
+        final_area = calc.calculate_burn_area(t_block)
+        burned = calc.burned_mass(t_block)
+        print(f"\nДополнительная информация на момент блокирования ({t_block:.1f} с):")
+        print(f"Площадь пожара: {final_area:.1f} м²")
+        print(f"Масса выгоревшего топлива: {burned:.1f} кг")
+        print(f"Температура в помещении: {calc.temperature(t_block) - 273.15:.1f}°C")
+
+        if calc.toxic_params:
+            tox = calc.toxic_concentrations(t_block)
+            print("\nКонцентрации токсичных веществ:")
+            print(f"CO: {tox['CO']:.4f} кг/м³")
+            print(f"CO2: {tox['CO2']:.4f} кг/м³")
+
+    # Строим графики
+    calc.plot_dynamics()
+
+    # Сохраняем результаты
+    calc.save_results(results, 'gasoline_fire_results.json')
+
+
+if __name__ == "__main__":
+    main()
