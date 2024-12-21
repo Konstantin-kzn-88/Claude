@@ -237,33 +237,24 @@ class FireHazardCalculator:
         times = np.linspace(0, t_max, 300)
         temps = [self.temperature(t) - 273.15 for t in times]  # перевод в °C
         visibilities = [self.visibility(t) for t in times]
-        areas = [self.calculate_burn_area(t) for t in times]  # Добавлен график площади
-
-        n_plots = 4 if self.toxic_params else 3  # Увеличено количество графиков
+        n_plots = 3 if self.toxic_params else 3  # Увеличено количество графиков
         fig, axs = plt.subplots(n_plots, 1, figsize=(10, 4 * n_plots))
 
-        # График площади горения
-        axs[0].plot(times, areas, 'g-', label='Площадь горения')
+        # График температуры
+        axs[0].plot(times, temps, 'r-', label='Температура')
+        axs[0].axhline(y=70, color='r', linestyle='--', alpha=0.5, label='Критическое значение')
         axs[0].set_xlabel('Время, с')
-        axs[0].set_ylabel('Площадь, м²')
+        axs[0].set_ylabel('Температура, °C')
         axs[0].grid(True)
         axs[0].legend()
 
-        # График температуры
-        axs[1].plot(times, temps, 'r-', label='Температура')
-        axs[1].axhline(y=70, color='r', linestyle='--', alpha=0.5, label='Критическое значение')
+        # График задымления
+        axs[1].plot(times, visibilities, 'b-', label='Задымление')
+        axs[1].axhline(y=1.0, color='b', linestyle='--', alpha=0.5, label='Критическое значение')
         axs[1].set_xlabel('Время, с')
-        axs[1].set_ylabel('Температура, °C')
+        axs[1].set_ylabel('Относительная задымленность')
         axs[1].grid(True)
         axs[1].legend()
-
-        # График задымления
-        axs[2].plot(times, visibilities, 'b-', label='Задымление')
-        axs[2].axhline(y=1.0, color='b', linestyle='--', alpha=0.5, label='Критическое значение')
-        axs[2].set_xlabel('Время, с')
-        axs[2].set_ylabel('Относительная задымленность')
-        axs[2].grid(True)
-        axs[2].legend()
 
         # График токсичных веществ
         if self.toxic_params:
@@ -272,16 +263,16 @@ class FireHazardCalculator:
             co2_values = [d['CO2'] for d in tox_data]
             hcl_values = [d['HCl'] for d in tox_data]
 
-            axs[3].plot(times, co_values, 'g-', label='CO')
-            axs[3].plot(times, co2_values, 'm-', label='CO2')
-            axs[3].plot(times, hcl_values, 'y-', label='HCl')
-            axs[3].axhline(y=self.crit_co, color='g', linestyle='--', alpha=0.5)
-            axs[3].axhline(y=self.crit_co2, color='m', linestyle='--', alpha=0.5)
-            axs[3].axhline(y=self.crit_hcl, color='y', linestyle='--', alpha=0.5)
-            axs[3].set_xlabel('Время, с')
-            axs[3].set_ylabel('Концентрация, кг/м³')
-            axs[3].grid(True)
-            axs[3].legend()
+            axs[2].plot(times, co_values, 'g-', label='CO')
+            axs[2].plot(times, co2_values, 'm-', label='CO2')
+            axs[2].plot(times, hcl_values, 'y-', label='HCl')
+            axs[2].axhline(y=self.crit_co, color='g', linestyle='--', alpha=0.5)
+            axs[2].axhline(y=self.crit_co2, color='m', linestyle='--', alpha=0.5)
+            axs[2].axhline(y=self.crit_hcl, color='y', linestyle='--', alpha=0.5)
+            axs[2].set_xlabel('Время, с')
+            axs[2].set_ylabel('Концентрация, кг/м³')
+            axs[2].grid(True)
+            axs[2].legend()
 
         plt.tight_layout()
         plt.savefig(save_path)
@@ -292,7 +283,7 @@ def main():
     # Параметры помещения
     room = {
         'volume': 20*30*6,  # м³
-        'vent_area': 0.001,  # м²
+        'vent_area': 1,  # м²
         'init_temp': 293,  # K
         'burn_area': 1.0,  # м² (начальная площадь пролива)
         'height': 6.0,  # м
@@ -302,22 +293,22 @@ def main():
     # Параметры бензина
     gasoline = {
         'heat_value': 44000,  # кДж/кг
-        'smoke_value': 236,  # Нп×м²/кг
+        'smoke_value': 800,  # Нп×м²/кг
         'burn_rate': 0.06  # кг/(м²×с)
     }
 
     # Параметры токсичности для бензина
     toxic = ToxicityParams(
         co_yield=0.1094,  # кг/кг
-        co2_yield=3.0,  # кг/кг
-        hcl_yield=0.0  # кг/кг (для бензина нет)
+        co2_yield=7.0,  # кг/кг
+        hcl_yield=3.0  # кг/кг (для бензина нет)
     )
 
     # Параметры разлива
     liquid = LiquidFuelParams(
         density=750,  # кг/м³
         thickness=0.02,  # м (5 мм)
-        spread_rate=0.4  # м²/с
+        spread_rate=0.0001  # м²/с
     )
 
     # Создаем калькулятор
